@@ -23,13 +23,21 @@ CreatorScout is a Windows desktop app built for indie game marketing. You descri
   - **Predicted views:** what a video about your game would probably get.
   - **Expected views per pitch:** chance × predicted views × reachability. This is the default sort order.
 - **A self-calibrating model.** Each search trains a small model on the public YouTube coverage of your genre, so the weights fit your niche instead of being hard-coded.
+- **No bias towards viral hits or giant channels.** A game almost everyone played (the viral hit of your genre) counts less as evidence, and very large channels are discounted by how hard they are to reach.
 - **Semantic matching** with a pretrained sentence-embedding model (MiniLM), combined with TF-IDF keyword matching.
 - **Explanations.** Every creator shows what pushed the prediction up or down, which similar games they played, and how those videos performed.
 - **Public contact details:**
-  - emails from YouTube descriptions, plus the creator's own Linktree or website (with a headless-browser fallback for JavaScript pages);
-  - every email rated High / Medium / Low with a reason, and helpdesk, merch and platform addresses rejected automatically;
+  - emails from YouTube descriptions, plus the creator's own Linktree or website. JavaScript-only pages are rendered with the Edge or Chrome already installed on your PC (headless, no window), with Selenium as a second option;
+  - every email rated High / Medium / Low with a reason, and helpdesk, merch, platform and sponsor addresses rejected automatically;
+  - an address that shows up on several different creators is kept but flagged **Shared · agency?**: it's usually their manager or talent agency, a valid contact but not the creator's own, so you decide;
   - a fast manual review mode (`V` = OK, `X` = wrong, `O` = open the page where it was found), remembered across runs.
-- **Contacts tracker.** Paste any YouTube link, @handle or name to see instantly whether you've already contacted that creator. Includes notes and CSV export.
+- **One-click email drafts.** **Write email** opens a personalised draft in Gmail, Outlook or your default mail app, with the subject and body filled in from your template. You review it and press Send yourself; nothing is ever sent automatically.
+- **Outreach tracker:**
+  - paste any YouTube link, @handle or name to see instantly whether you've already contacted that creator;
+  - a status for every creator: Contacted → Followed up → Replied → Key sent → Video published (or Declined / No reply);
+  - **follow-up reminders:** creators who haven't answered after N days (7 by default) are highlighted, counted on the sidebar, and get a ready-made follow-up draft;
+  - **published videos are detected automatically:** once a day the app checks the latest uploads of everyone you contacted (~2 API units each) and, when one of them covers your game, marks them as *Video published* with the link and view count;
+  - notes and CSV export.
 - **"Why isn't X in the list?"** It explains exactly where a channel dropped out, and can analyse and add it on demand.
 - **Steam tags as keywords:**
   - pull tags from your game's Steam page, or the tags your comparable games share;
@@ -59,6 +67,7 @@ Your game + comparable games
   └─ 5. Predict       logistic regression trained on this genre's public coverage
   └─ 6. Emails        descriptions → creator's own links → manual review
   └─ Results          ranked table, explanations, CSV export
+  └─ Outreach         email drafts → statuses → follow-ups → published-video detection
 ```
 
 ### The coverage model
@@ -120,7 +129,8 @@ Every push to GitHub also builds the `.exe` automatically: see **Actions → lat
 1. **Your game:** fill in the name and a Steam-style description, list 5–15 comparable games, and pick keywords or Steam tags.
 2. **FIND & RANK.**
 3. **Results:** sort, search, open a creator to see why they rank where they do, and review emails.
-4. **Export CSV:** send personalised emails by hand, using the generated draft as a starting point.
+4. **Write email:** open the personalised draft in Gmail, Outlook or your mail app, read it, and send it yourself. The creator moves to **Contacts**.
+5. **Contacts:** update statuses as answers come in, follow up when reminded, and see the videos creators publish about your game.
 
 ---
 
@@ -129,7 +139,7 @@ Every push to GitHub also builds the `.exe` automatically: see **Actions → lat
 - **It uses only public data:** the official YouTube Data API and public pages the creator links to. It respects `robots.txt` and never bypasses CAPTCHAs or logins.
 - **Everything is stored locally** in `%APPDATA%\CreatorScout\`: the API key, cache, contacted list and email reviews. None of it is in the repository.
 - **Exported CSVs contain personal data (emails)** and are git-ignored. Use them only for outreach, and honour any request not to be contacted (GDPR).
-- **Send emails one by one, personalised.** Bulk mailing gets flagged as spam and doesn't work for indie outreach anyway.
+- **Send emails one by one, personalised.** The app only opens drafts; it never sends anything. Bulk mailing gets flagged as spam and doesn't work for indie outreach anyway.
 
 ---
 
@@ -146,6 +156,9 @@ python tests/test_lookup.py          # every YouTube link format, DB migration, 
 python tests/test_explain.py         # "why isn't X in the list?", adding a channel by hand
 python tests/test_steam.py           # Steam store tags, SteamSpy fallback, full tag list
 python tests/test_coverage_sources.py # games found in tags / descriptions / Steam links, older uploads
+python tests/test_viral.py           # viral hits count less, mega channels move down
+python tests/test_outreach.py        # statuses, follow-ups, DB migration, email drafts, published videos
+python tests/test_gui.py             # the real window, end to end: search → draft → statuses → video found
 ```
 
 The tests run against a simulated YouTube API that answers in the real JSON format, so no API key or internet connection is needed.
@@ -156,24 +169,32 @@ The tests run against a simulated YouTube API that answers in the real JSON form
 
 | File | Purpose |
 |---|---|
-| `app.py` | Tkinter UI: pages, table, dialogs, background thread with a message queue |
+| `app.py` | Entry point and main window: theme, sidebar, shared dialogs; assembled from the page modules below |
+| `ui/search_page.py` | "Your game" page: game details, comparable games, Steam tags, filters |
+| `ui/results_page.py` | Results: ranked table, search / sort / filter, explanations, email review, export |
+| `ui/contacts_page.py` | Contacts: "have I contacted them?", statuses, follow-ups, published-video check |
+| `ui/settings_page.py` | Email template and Settings pages |
+| `ui/runner.py` | Runs a search on a background thread and reports progress through a queue |
+| `ui/theme.py`, `ui/util.py` | Colours, fonts, constants; small shared helpers |
+| `outreach.py` | Statuses, follow-up reminders, published-video detection, Gmail / Outlook / mailto drafts |
 | `scout.py` | Pipeline: discovery → analysis → signals → prediction → explanations |
 | `model.py` | Self-calibrating coverage model (leave-one-game-out logistic regression) |
 | `embed.py` | Pretrained MiniLM sentence embeddings via ONNX Runtime |
 | `youtube_api.py` | YouTube Data API v3 client: cache, retries, quota accounting, batching |
 | `contacts.py` | Email and link extraction, email confidence rating, creator-owned links |
-| `enrich.py` | Emails from creators' own pages (`requests`, Selenium fallback) |
+| `enrich.py` | Emails from creators' own pages (`requests`; headless Edge / Chrome or Selenium for JavaScript pages) |
 | `lookup.py` | Understands any YouTube link, @handle or name for the contacts check |
 | `steam.py` | Steam store tags, full tag list, SteamSpy fallback |
-| `storage.py` | SQLite (cache, contacts, email reviews) and JSON settings |
+| `storage.py` | SQLite (cache, contacts and their statuses, email reviews) with in-place migrations, JSON settings |
 
 ## Tech stack
 
-Python · Tkinter/ttk · YouTube Data API v3 · SQLite · NumPy · ONNX Runtime + Hugging Face Tokenizers (MiniLM) · Selenium · PyInstaller · GitHub Actions
+Python · Tkinter/ttk · YouTube Data API v3 · SQLite · NumPy · ONNX Runtime + Hugging Face Tokenizers (MiniLM) · headless Edge / Chrome · Selenium · PyInstaller · GitHub Actions
 
 ## Limitations
 
 - **Coverage chance** means "how likely a channel like this is to cover a game like yours". It does not predict whether they will read your email.
 - **Reachability** (the size penalty in expected views) is an estimate based on creator interviews, not a measured value.
 - **Coverage older than the analysed uploads is missed** (100 by default, up to 500). A game shown on screen but never named in the title, tags or description can't be detected.
+- **Published-video detection** looks at each creator's latest 30 uploads since you contacted them, and needs your game's name in the title, tags or description (or its Steam link). Fill in your game's Steam page on the "Your game" page for the most reliable match.
 - **The free API quota** is 10,000 units per day.

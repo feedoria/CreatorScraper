@@ -244,12 +244,12 @@ def activity_score(days: int | None) -> float:
 
 
 def reachability(subs: int | None) -> float:
-    """Share of pitches a channel of this size can realistically act on. Big channels
-    get 30-100 pitches a day and cover ~10-25% of fitting games (creator interviews),
-    so the chance shrinks with size: 25k -> 0.86, 250k -> 0.5, 1M -> 0.25."""
+    """Share of pitches a channel of this size can realistically act on. A 500k creator
+    says he gets 30-100 pitches a day and can cover only ~10-25% of games that fit him,
+    so this is calibrated to ≈0.23 at 500k: 25k -> 0.86, 150k -> 0.5, 1M -> 0.13, 5M -> 0.03."""
     if not subs:
         return 0.8
-    return 1 / (1 + (subs / 250_000) ** 0.8)
+    return 1 / (1 + subs / 150_000)
 
 
 def coverage_score(n: int) -> float:

@@ -37,9 +37,11 @@ class Store:
                 PRIMARY KEY(channel_id, email));
             """
         )
-        for col in ("handle", "email", "url"):          # columns added in later versions
+        for col, typ in (("handle", "TEXT"), ("email", "TEXT"), ("url", "TEXT"),  # added in later versions
+                         ("status", "TEXT"), ("status_ts", "REAL"), ("video_url", "TEXT"),
+                         ("video_title", "TEXT"), ("video_views", "INTEGER")):
             try:
-                self._db.execute(f"ALTER TABLE contacted ADD COLUMN {col} TEXT")
+                self._db.execute(f"ALTER TABLE contacted ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
                 pass
         self._db.commit()
@@ -76,12 +78,18 @@ class Store:
                       handle: str = "", email: str = "", url: str = "") -> None:
         with self._lock:
             if value:
-                old = self._db.execute("SELECT note FROM contacted WHERE channel_id=?", (channel_id,)).fetchone()
-                self._db.execute(
-                    "INSERT OR REPLACE INTO contacted(channel_id, title, ts, note, handle, email, url) "
-                    "VALUES(?,?,?,?,?,?,?)",
-                    (channel_id, title, time.time(), old[0] if old else "", handle or "", email or "", url or ""),
-                )
+                old = self._db.execute("SELECT 1 FROM contacted WHERE channel_id=?", (channel_id,)).fetchone()
+                if old:  # already tracked: keep date, status, note and video; fill in new details
+                    for col, val in (("title", title), ("handle", handle), ("email", email), ("url", url)):
+                        if val:
+                            self._db.execute(f"UPDATE contacted SET {col}=? WHERE channel_id=?", (val, channel_id))
+                else:
+                    now = time.time()
+                    self._db.execute(
+                        "INSERT INTO contacted(channel_id, title, ts, note, handle, email, url, status, status_ts) "
+                        "VALUES(?,?,?,?,?,?,?,?,?)",
+                        (channel_id, title, now, "", handle or "", email or "", url or "", "Contacted", now),
+                    )
             else:
                 self._db.execute("DELETE FROM contacted WHERE channel_id=?", (channel_id,))
             self._db.commit()
@@ -91,9 +99,26 @@ class Store:
         with self._lock:
             cur = self._db.execute(
                 "SELECT channel_id, title, ts, COALESCE(note,''), COALESCE(handle,''), "
-                "COALESCE(email,''), COALESCE(url,'') FROM contacted ORDER BY ts DESC")
-            keys = ("channel_id", "title", "ts", "note", "handle", "email", "url")
+                "COALESCE(email,''), COALESCE(url,''), COALESCE(status,'Contacted'), COALESCE(status_ts, ts), "
+                "COALESCE(video_url,''), COALESCE(video_title,''), video_views FROM contacted ORDER BY ts DESC")
+            keys = ("channel_id", "title", "ts", "note", "handle", "email", "url", "status", "status_ts",
+                    "video_url", "video_title", "video_views")
             return [dict(zip(keys, r)) for r in cur]
+
+    def set_status(self, channel_id: str, status: str, ts: float | None = None) -> None:
+        with self._lock:
+            self._db.execute("UPDATE contacted SET status=?, status_ts=? WHERE channel_id=?",
+                             (status, ts or time.time(), channel_id))
+            self._db.commit()
+
+    def set_video(self, channel_id: str, url: str, title: str, views: int | None) -> None:
+        """Remember the video they published about your game (and mark it as published)."""
+        with self._lock:
+            self._db.execute(
+                "UPDATE contacted SET video_url=?, video_title=?, video_views=?, status='Video published', "
+                "status_ts=CASE WHEN COALESCE(status,'')='Video published' THEN status_ts ELSE ? END "
+                "WHERE channel_id=?", (url, title, views, time.time(), channel_id))
+            self._db.commit()
 
     def contacted_times(self) -> dict[str, float]:
         with self._lock:

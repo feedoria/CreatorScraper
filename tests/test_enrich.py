@@ -91,5 +91,24 @@ def main():
     st4 = enrich.enrich(cs2, Store(Path(tempfile.mkdtemp()) / "t2.sqlite3"), session=BadSess())
     assert cs2[0].emails == [] and cs2[1].emails[0]["email"] == "digger.biz@gmail.com", st4
     print("  bad-encoding site skipped, others still found ✓")
-    print("ENRICH TESTS PASSED")
-main()
+    main()
+
+# real headless browser (when one is available on this machine): renders JavaScript-only pages
+import os, tempfile as _tf
+exe = enrich.find_browser_exe()
+hs = "/opt/pw-browsers/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell"
+if not exe and os.path.isfile(hs):
+    exe = hs
+if exe:
+    page = Path(_tf.mkdtemp()) / "js.html"
+    page.write_text('<div id="r"></div><script>setTimeout(()=>{document.getElementById("r").innerHTML='
+                    '"Business: <a href=\\"mailto:render.me@studio-js.dev\\">mail</a>"},500)</script>')
+    b = enrich.DumpDomBrowser(exe)
+    html = enrich.browser_html(b, page.as_uri())
+    b.quit()
+    if html is not None:
+        assert [e["email"] for e in enrich.emails_in_html(html)] == ["render.me@studio-js.dev"], html[:300]
+        print(f"real headless browser ({Path(exe).name}) rendered a JavaScript-only page ✓")
+    else:
+        print(f"real headless browser ({Path(exe).name}) gave no output here — skipped")
+print("ENRICH TESTS PASSED")

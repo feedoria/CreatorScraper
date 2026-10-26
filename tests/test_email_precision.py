@@ -31,4 +31,24 @@ c.recent = [{"description": "Thanks to the devs! Contact them at partners@somest
 em = youtube_emails(c)
 assert [e["email"] for e in em] == ["insymbiz@gmail.com"] and em[0]["conf"] == "high", em
 print("youtube_emails: sponsor address in one video ignored, creator's business email kept ✓")
+
+# 5) sponsors are rejected; an address shared by several creators (a manager / agency) is kept but flagged
+from contacts import mark_shared_emails, is_sponsor_link
+assert is_sponsor_link("https://gamersupps.gg/smii7y") and not is_sponsor_link("https://linktr.ee/smii7y")
+assert rate_email("contact@gamersupps.gg", "SMii7Y", "smii7y", "https://gamersupps.gg/smii7y")[0] is None
+def C(cid, *emails):
+    c = Candidate(channel_id=cid, title=cid)
+    c.emails = [{"email": e, "source": s, "conf": conf} for e, s, conf in emails]
+    return c
+cs = [C("a", ("bookings@talentco.com", "website", "high"), ("a.biz@gmail.com", "YouTube", "medium")),
+      C("b", ("bookings@talentco.com", "website", "high")),
+      C("e", ("bookings@talentco.com", "YouTube", "medium")),
+      C("c", ("bookings@talentco.com", "website", "verified")),    # you approved it for c: untouched
+      C("d", ("d@gmail.com", "manual", "verified"))]
+assert mark_shared_emails(cs) == 1
+assert [e["email"] for e in cs[0].emails] == ["a.biz@gmail.com", "bookings@talentco.com"]   # own email first
+shared = cs[1].emails[0]
+assert shared["conf"] == "shared" and shared["shared_with"] == ["a", "e"] and "manager or agency" in shared["why"]
+assert cs[3].emails[0]["conf"] == "verified" and cs[4].emails[0]["conf"] == "verified"
+print("shared manager/agency emails kept but flagged, creator's own email ranked first, approvals untouched ✓")
 print("EMAIL PRECISION TESTS PASSED")

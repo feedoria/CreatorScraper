@@ -106,6 +106,16 @@ GENERIC_NAME_WORDS = {"the", "and", "gaming", "games", "game", "gamer", "officia
                       "play", "tv", "yt", "youtube", "live", "stream", "streams", "videos", "video", "mr",
                       "real", "its", "just", "with"}
 LINK_SERVICES = ("linktr.ee", "beacons.ai", "carrd.co", "bio.link", "solo.to")
+# Sponsors and affiliate shops that creators link in their descriptions: never "their" site or inbox.
+SPONSOR_DOMAINS = ("gamersupps", "gfuel", "nordvpn", "expressvpn", "surfshark", "raidshadowlegends",
+                   "plarium", "manscaped", "honey", "audible", "skillshare", "squarespace", "displate",
+                   "operagx", "opera.com", "ridge.com", "keeps.com", "betterhelp", "hellofresh", "dbrand",
+                   "secretlab", "corsair", "razer", "logitech", "hyperx", "steelseries", "elgato", "fanatical",
+                   "humblebundle", "g2a", "kinguin", "eneba", "instant-gaming", "gamivo", "cdkeys", "raid.",
+                   "worldofwarships", "wargaming", "hero-wars", "herowars", "rushroyale", "genshin",
+                   "hoyoverse", "dosh", "ground.news", "incogni", "aura.com", "rocketmoney", "factor75",
+                   "athleticgreens", "drinkag1", "ag1.com", "mangomint", "streamelements", "fourthwall",
+                   "teespring", "spring.com", "creator-spring", "spreadshirt", "redbubble", "bonfire.com")
 
 
 def registered_domain(host: str) -> str:
@@ -136,6 +146,8 @@ def rate_email(email: str, title: str, handle: str = "", page_url: str = "",
     local, _, domain = email.lower().partition("@")
     if any(b in domain for b in BAD_DOMAIN_PARTS):
         return None, "a helpdesk / platform / company address"
+    if any(b in domain for b in SPONSOR_DOMAINS):
+        return None, "a sponsor's address (linked in their description), not the creator's"
     if BAD_LOCAL_RE.match(local):
         return None, f"a '{local.split('.')[0]}' address (support, merch, orders…), not for collaborations"
     compact = re.sub(r"[^a-z0-9]", "", local + domain.split(".")[0])
@@ -153,7 +165,7 @@ def rate_email(email: str, title: str, handle: str = "", page_url: str = "",
     return "low", "unrelated domain — check before using"
 
 
-CONF_ORDER = {"verified": 0, "high": 1, "medium": 2, "low": 3}
+CONF_ORDER = {"verified": 0, "high": 1, "medium": 2, "low": 3, "shared": 4}
 
 
 def own_links(channel_description: str, video_descriptions: list[str], min_repeats: int = 3,
@@ -176,4 +188,38 @@ def own_links(channel_description: str, video_descriptions: list[str], min_repea
             seen.add(k)
     order = {k: i for i, (k, _) in enumerate(LINK_KINDS)}
     links.sort(key=lambda l: order.get(l["kind"], 99))
-    return [l for l in links if l["kind"] != "steam"][:limit]
+    return [l for l in links if l["kind"] != "steam" and not is_sponsor_link(l["url"])][:limit]
+
+
+def is_sponsor_link(url: str) -> bool:
+    host = (url or "").lower().split("//", 1)[-1].split("/", 1)[0]
+    return any(s in host for s in SPONSOR_DOMAINS)
+
+
+def mark_shared_emails(cands) -> int:
+    """An address found for 2+ different creators is often their manager or talent agency
+    (one agency represents several creators) — a useful contact, but not the creator's own.
+    It is kept, marked 'shared' (lowest confidence) with the other creators named, so you
+    decide with V / X. Known sponsor inboxes never get this far (rate_email rejects them).
+    Emails you added or approved are left untouched. Returns how many addresses were shared."""
+    owners: dict[str, dict] = {}
+    for c in cands:
+        for e in c.emails:
+            if e.get("source") != "manual" and e.get("conf") != "verified":
+                owners.setdefault(e["email"], {})[c.channel_id] = c.title
+    shared = {e: who for e, who in owners.items() if len(who) >= 2}
+    for c in cands:
+        changed = False
+        for e in c.emails:
+            who = shared.get(e["email"])
+            if not who or e.get("source") == "manual" or e.get("conf") == "verified":
+                continue
+            others = [t for cid, t in who.items() if cid != c.channel_id]
+            names = ", ".join(others[:3]) + (f" +{len(others) - 3}" if len(others) > 3 else "")
+            e["conf"] = "shared"
+            e["shared_with"] = others
+            e["why"] = f"also listed by {names} — probably their manager or agency; check before using"
+            changed = True
+        if changed:
+            c.emails.sort(key=lambda e: CONF_ORDER.get(e.get("conf"), 5))
+    return len(shared)

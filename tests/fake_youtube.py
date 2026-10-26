@@ -14,7 +14,7 @@ APPIDS = {g: 100000 + i for i, g in enumerate(GAMES)}
 
 
 class World:
-    def __init__(self, seed=1, n=120, n_videos=30, rich=False):
+    def __init__(self, seed=1, n=120, n_videos=30, rich=False, viral=None):
         """rich=True: long channels where coverage is often old, only in tags, or only a Steam link."""
         rnd = random.Random(seed)
         self.ch = {}
@@ -24,7 +24,9 @@ class World:
             keys = rnd.random() < (0.45 if love else 0.1)
             subs = int(10 ** rnd.uniform(3.2, 6.2))
             med = subs * rnd.uniform(0.04, 0.35)
-            covered = [g for g in GAMES if rnd.random() < (0.45 if love else 0.04)]
+            covered = [g for g in GAMES if g != viral and rnd.random() < (0.45 if love else 0.04)]
+            if viral and rnd.random() < (0.85 if subs > 500_000 else 0.15):   # every big channel played the hit
+                covered.append(viral)
             if not covered:                        # everybody was found through at least one game
                 covered = [rnd.choice(GAMES)] if rnd.random() < 0.6 else []
             last = rnd.choice([1, 3, 8, 20, 45]) if rnd.random() < 0.9 else 200

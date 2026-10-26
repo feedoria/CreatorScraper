@@ -46,10 +46,28 @@ def sigmoid(z: float) -> float:
     return e / (1 + e)
 
 
-def features(c, exclude: str | None = None) -> dict:
-    """Signals for one channel. `exclude` = a game whose evidence must be ignored."""
+def game_weights(cands, games: list[str]) -> dict:
+    """How informative it is to have played each game. 1.0 = a typical comparable game;
+    a hit that far more channels played than usual (e.g. a viral 'A Game About Digging A
+    Hole' that every big channel tried) counts proportionally less: weight = typical share /
+    this game's share, between 0.15 and 1."""
+    n = max(1, len(cands))
+    share = {g: sum(1 for c in cands if g in c.matched_games) / n for g in games}
+    seen = sorted(v for v in share.values() if v > 0)
+    if not seen:
+        return {g: 1.0 for g in games}
+    typical = seen[len(seen) // 2]
+    return {g: max(0.15, min(1.0, typical / share[g])) if share[g] > 0 else 1.0 for g in games}
+
+
+def features(c, exclude: str | None = None, weights: dict | None = None) -> dict:
+    """Signals for one channel. `exclude` = a game whose evidence must be ignored;
+    `weights` = how much each game counts (viral games count less)."""
+    weights = weights or {}
     games = {g for g in c.matched_games if g != exclude}
-    views = [v for g, vs in c.game_views.items() if g != exclude for v in vs]
+    niche = {g for g in games if weights.get(g, 1.0) >= 0.3}
+    use = niche or games          # judge genre performance on niche games when there are any
+    views = [v for g, vs in c.game_views.items() if g in use for v in vs]
     perf = 0.0
     if views and c.median_views:
         ratio = sorted(views)[len(views) // 2] / max(1.0, c.median_views)
@@ -63,7 +81,7 @@ def features(c, exclude: str | None = None) -> dict:
     return {
         "semantic": c.sem_sim,
         "keywords": c.kw_sim,
-        "similar_games": math.log1p(len(games)),
+        "similar_games": math.log1p(sum(weights.get(g, 1.0) for g in games)),
         "genre_performance": perf,
         "accepts_keys": 1.0 if c.key_videos else 0.0,
         "sponsored": 1.0 if c.sponsor_videos else 0.0,
@@ -84,13 +102,14 @@ class Model:
     positives: int = 0
     games: list = field(default_factory=list)
     active: list = field(default_factory=lambda: list(FEATURES))
+    weights: dict = field(default_factory=dict)
 
     def z(self, x: dict) -> dict:
         return {f: (x[f] - self.mean[f]) / self.std[f] if f in self.active else 0.0 for f in FEATURES}
 
     def predict(self, c) -> tuple[float, dict]:
         """(probability, contribution of each signal in log-odds)."""
-        zx = self.z(features(c))
+        zx = self.z(features(c, weights=self.weights))
         contrib = {f: self.coef.get(f, 0.0) * zx[f] for f in FEATURES}
         return sigmoid(self.intercept + sum(contrib.values())), contrib
 
@@ -111,14 +130,19 @@ def _standardise(rows: list[dict]):
     return mean, std, active
 
 
-def _fit(X: list[list[float]], y: list[int], l2: float = 1.0, iters: int = 400, lr: float = 0.5):
-    """Batch gradient descent for L2-regularised logistic regression."""
+def _fit(X: list[list[float]], y: list[int], l2: float = 1.0, iters: int = 400, lr: float = 0.5,
+         sw: list[float] | None = None):
+    """Batch gradient descent for L2-regularised, sample-weighted logistic regression."""
     n, k = len(X), len(X[0])
-    w, b = [0.0] * k, math.log((sum(y) + 0.5) / (n - sum(y) + 0.5))
+    sw = sw or [1.0] * n
+    tot = sum(sw)
+    pos = sum(s for s, yi in zip(sw, y) if yi)
+    w, b = [0.0] * k, math.log((pos + 0.5) / (tot - pos + 0.5))
+    n = tot
     for _ in range(iters):
         gw, gb = [0.0] * k, 0.0
-        for xi, yi in zip(X, y):
-            err = sigmoid(b + sum(a * c for a, c in zip(w, xi))) - yi
+        for xi, yi, si in zip(X, y, sw):
+            err = si * (sigmoid(b + sum(a * c for a, c in zip(w, xi))) - yi)
             gb += err
             for j in range(k):
                 gw[j] += err * xi[j]
@@ -138,25 +162,28 @@ def found_without(c, game: str, query_for) -> bool:
 
 
 def train(cands, games: list[str], query_for=lambda g: f"{g} gameplay") -> Model:
-    rows, ys, used = [], [], []
+    wts = game_weights(cands, games)
+    rows, ys, sw, used = [], [], [], []
     for g in games:
         pool = [c for c in cands if found_without(c, g, query_for)]
         y = [1 if g in c.matched_games else 0 for c in pool]
         if sum(y) < MIN_POS or len(y) - sum(y) < MIN_NEG:
             continue
         used.append(g)
-        rows += [features(c, exclude=g) for c in pool]
+        rows += [features(c, exclude=g, weights=wts) for c in pool]
         ys += y
+        sw += [wts.get(g, 1.0)] * len(pool)   # learning to predict a viral hit teaches little
 
     if len(rows) < MIN_ROWS or len(used) < 2:
-        base = [features(c) for c in cands] or [dict.fromkeys(FEATURES, 0.0)]
+        base = [features(c, weights=wts) for c in cands] or [dict.fromkeys(FEATURES, 0.0)]
         mean, std, active = _standardise(base)
-        return Model(dict(PRIOR), PRIOR_INTERCEPT, mean, std, learned=False, games=used, active=active)
+        return Model(dict(PRIOR), PRIOR_INTERCEPT, mean, std, learned=False, games=used, active=active,
+                     weights=wts)
 
     mean, std, active = _standardise(rows)
     X = [[(r[f] - mean[f]) / std[f] for f in active] for r in rows]
-    w, b = _fit(X, ys)
+    w, b = _fit(X, ys, sw=sw)
     coef = dict.fromkeys(FEATURES, 0.0)
     coef.update(zip(active, w))
     return Model(coef, b, mean, std, learned=True, rows=len(rows), positives=sum(ys),
-                 games=used, active=active)
+                 games=used, active=active, weights=wts)

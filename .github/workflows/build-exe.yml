@@ -32,6 +32,12 @@ jobs:
         run: python tests/test_steam.py
       - name: Test — game detection (tags, descriptions, Steam links)
         run: python tests/test_coverage_sources.py
+      - name: Test — viral games and mega channels
+        run: python tests/test_viral.py
+      - name: Test — outreach tracker, follow-ups, published videos
+        run: python tests/test_outreach.py
+      - name: Test — full app window (search → email draft → statuses → video found)
+        run: python tests/test_gui.py
       - name: Build CreatorScout.exe
         run: python -m PyInstaller --noconfirm --onefile --windowed --name CreatorScout --icon assets/icon.ico --add-data "assets;assets" --collect-data selenium --collect-binaries onnxruntime --collect-binaries tokenizers app.py
       - uses: actions/upload-artifact@v4

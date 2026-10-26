@@ -149,42 +149,110 @@ class Fetcher:
 
 
 # ------------------------------------------------------------------ browser
+def find_browser_exe() -> str | None:
+    """Edge or Chrome already installed on this computer (Edge ships with every Windows)."""
+    import os
+    import shutil
+    env = os.environ.get
+    candidates = []
+    for base in (env("ProgramFiles(x86)"), env("ProgramFiles"), env("LOCALAPPDATA")):
+        if base:
+            candidates += [os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+                           os.path.join(base, "Google", "Chrome", "Application", "chrome.exe")]
+    candidates += ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    for name in ("msedge", "microsoft-edge", "google-chrome", "chrome", "chromium", "chromium-browser"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+class DumpDomBrowser:
+    """Runs the installed Edge/Chrome headless with --dump-dom: the page's HTML after its
+    JavaScript ran. No WebDriver, nothing to download, separate temporary profile."""
+
+    def __init__(self, exe: str):
+        import tempfile
+        self.exe = exe
+        self.profile = tempfile.mkdtemp(prefix="creatorscout-browser-")
+
+    def fetch(self, url: str, budget_ms: int = 6000, timeout: int = 30) -> str | None:
+        args = [self.exe, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+                "--mute-audio", "--disable-extensions", f"--user-data-dir={self.profile}",
+                f"--user-agent={UA}", f"--virtual-time-budget={budget_ms}", "--dump-dom", url]
+        import os
+        if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() == 0:
+            args.insert(1, "--no-sandbox")  # Linux as root only; never needed on Windows
+        kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, "CREATE_NO_WINDOW") else {}
+        try:
+            r = subprocess.run(args, capture_output=True, timeout=timeout, **kw)
+        except Exception:
+            return None
+        out = r.stdout.decode("utf-8", errors="replace")
+        return out if "<" in out else None
+
+    def quit(self):
+        import shutil
+        shutil.rmtree(self.profile, ignore_errors=True)
+
+
 def make_browser():
-    """Headless Edge (always on Windows), else Chrome. None if Selenium/browser missing.
-    Selenium Manager downloads the matching driver automatically the first time."""
+    """A way to render JavaScript pages, most robust first:
+    1. the installed Edge/Chrome in headless --dump-dom mode (no driver needed),
+    2. Selenium WebDriver (Edge, then Chrome; Selenium Manager fetches the driver).
+    None if neither works; the reason is kept in LAST_BROWSER_ERROR."""
     global LAST_BROWSER_ERROR
     errors = []
+    exe = find_browser_exe()
+    if exe:
+        b = DumpDomBrowser(exe)
+        probe = b.fetch("data:text/html,<html><body><p id=x></p><script>document.getElementById('x')"
+                        ".textContent='ok-'+(1+1)</script></body></html>", 1000, timeout=20)
+        if probe and "ok-2" in probe:
+            return b
+        b.quit()
+        errors.append(f"headless {exe}: no output")
+    else:
+        errors.append("no Edge/Chrome executable found")
     try:
         from selenium import webdriver
     except ImportError as e:
-        LAST_BROWSER_ERROR = f"selenium not installed ({e})"
+        LAST_BROWSER_ERROR = " | ".join(errors + [f"selenium not installed ({e})"])
         return None
     for name in ("edge", "chrome"):
-        try:
-            if name == "edge":
-                from selenium.webdriver.edge.service import Service
-                opts = webdriver.EdgeOptions()
-            else:
-                from selenium.webdriver.chrome.service import Service
-                opts = webdriver.ChromeOptions()
-            for a in ("--headless=new", "--disable-gpu", "--log-level=3", "--mute-audio",
-                      f"--user-agent={UA}"):
-                opts.add_argument(a)
-            opts.page_load_strategy = "eager"
-            service = Service()
-            if hasattr(subprocess, "CREATE_NO_WINDOW"):  # no console flash in the .exe
-                service.creation_flags = subprocess.CREATE_NO_WINDOW
-            drv = (webdriver.Edge if name == "edge" else webdriver.Chrome)(options=opts, service=service)
-            drv.set_page_load_timeout(15)
-            return drv
-        except Exception as e:
-            errors.append(f"{name}: {type(e).__name__}: {str(e)[:300]}")
-            continue
+        for with_service in (True, False):
+            try:
+                opts = webdriver.EdgeOptions() if name == "edge" else webdriver.ChromeOptions()
+                for a in ("--headless=new", "--disable-gpu", "--log-level=3", "--mute-audio", f"--user-agent={UA}"):
+                    opts.add_argument(a)
+                opts.page_load_strategy = "eager"
+                kw = {}
+                if with_service:
+                    if name == "edge":
+                        from selenium.webdriver.edge.service import Service
+                    else:
+                        from selenium.webdriver.chrome.service import Service
+                    service = Service()
+                    if hasattr(subprocess, "CREATE_NO_WINDOW"):  # no console flash in the .exe
+                        service.creation_flags = subprocess.CREATE_NO_WINDOW
+                    kw["service"] = service
+                drv = (webdriver.Edge if name == "edge" else webdriver.Chrome)(options=opts, **kw)
+                drv.set_page_load_timeout(15)
+                return drv
+            except Exception as e:
+                errors.append(f"selenium {name}{'' if with_service else ' (default service)'}: "
+                              f"{type(e).__name__}: {str(e)[:300]}")
     LAST_BROWSER_ERROR = " | ".join(errors)
     return None
 
 
 def browser_html(driver, url: str, wait: float = 2.0) -> str | None:
+    if hasattr(driver, "fetch"):
+        return driver.fetch(url)
     try:
         driver.get(url)
         end = time.time() + 8
