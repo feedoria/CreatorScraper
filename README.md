@@ -11,6 +11,13 @@ CreatorScout is a Windows desktop app built for indie game marketing. You descri
 ## Features
 
 - **Discovery from comparable games.** It finds the channels that already played games like yours, which is the strongest signal of interest.
+- **Game detection beyond titles.** It looks at the last 100 uploads per channel (configurable up to 500) and recognises a game from:
+  - the video title;
+  - the video's tags;
+  - the exact name in the description;
+  - the game's Steam store link in the description.
+
+  On simulated channels this finds 85% of the real coverage, versus 8% when matching titles in the last 30 uploads only.
 - **Prediction for every creator:**
   - **Coverage chance:** how likely a channel like this is to cover a game like yours.
   - **Predicted views:** what a video about your game would probably get.
@@ -29,7 +36,7 @@ CreatorScout is a Windows desktop app built for indie game marketing. You descri
   - browse the full Steam tag list;
   - add your own keywords.
 - **Search, sort and filter** by any column. Natural A–Z sort, subscribers, contacted date, email confidence.
-- **Quota-aware.** The free YouTube quota is 10,000 units a day. A full search costs about 800–1,500 units, and repeat runs are almost free thanks to a local cache.
+- **Quota-aware.** The free YouTube quota is 10,000 units a day. A full search costs about 1,000–2,000 units, and repeat runs are almost free thanks to a local cache.
 
 | | |
 |---|---|
@@ -46,7 +53,7 @@ CreatorScout is a Windows desktop app built for indie game marketing. You descri
 Your game + comparable games
   └─ 1. Discover      search.list "<game> gameplay"          (100 units per game)
   └─ 2. Channels      channels.list, subscriber filter       (1 unit per 50 channels)
-  └─ 3. Analyse       last 30 uploads + their views          (~2 units per channel)
+  └─ 3. Analyse       last 100 uploads: views, tags, descriptions  (~4 units per channel)
   └─ 4. Signals       TF-IDF + MiniLM, similar games, genre performance,
                       accepted dev keys, size, engagement, activity
   └─ 5. Predict       logistic regression trained on this genre's public coverage
@@ -138,6 +145,7 @@ python tests/test_email_precision.py # real-world false positives (helpdesk, mer
 python tests/test_lookup.py          # every YouTube link format, DB migration, API resolution
 python tests/test_explain.py         # "why isn't X in the list?", adding a channel by hand
 python tests/test_steam.py           # Steam store tags, SteamSpy fallback, full tag list
+python tests/test_coverage_sources.py # games found in tags / descriptions / Steam links, older uploads
 ```
 
 The tests run against a simulated YouTube API that answers in the real JSON format, so no API key or internet connection is needed.
@@ -167,5 +175,5 @@ Python · Tkinter/ttk · YouTube Data API v3 · SQLite · NumPy · ONNX Runtime 
 
 - **Coverage chance** means "how likely a channel like this is to cover a game like yours". It does not predict whether they will read your email.
 - **Reachability** (the size penalty in expected views) is an estimate based on creator interviews, not a measured value.
-- **Games are recognised from video titles,** and only the last 30 uploads per channel are analysed.
+- **Coverage older than the analysed uploads is missed** (100 by default, up to 500). A game shown on screen but never named in the title, tags or description can't be detected.
 - **The free API quota** is 10,000 units per day.

@@ -56,6 +56,8 @@ class Settings:
     exclude_ids: set[str] = field(default_factory=set)
     use_semantic: bool = True
     tags: list[str] = field(default_factory=list)   # selected Steam/manual tags: used for matching
+    videos_per_channel: int = 100                   # uploads analysed per channel (1 unit / 50)
+    game_appids: dict = field(default_factory=dict) # comparable game -> Steam appid (for store links)
 
 
 @dataclass
@@ -93,6 +95,8 @@ class Candidate:
     exp_views: float = 0.0
     reach: float = 1.0
     contrib: dict = field(default_factory=dict)
+    match_sources: Counter = field(default_factory=Counter)  # title / tags / description / steam link
+    median_all: float | None = None
     stage: str = "found"          # found -> filtered_size / not_analysed / inactive / ranked
     added_manually: bool = False
 
@@ -146,6 +150,20 @@ def mentions(text: str, game: str) -> bool:
         return True
     sig = _significant(game)
     return len(sig) >= 2 and all(f" {w} " in t for w in sig)
+
+
+def match_video(title: str, tags: list[str], description: str, game: str, appid=None) -> str | None:
+    """Where a video shows it is about `game`: 'title', 'tags', 'steam link' or 'description'."""
+    if mentions(title, game):
+        return "title"
+    if any(mentions(t, game) for t in tags or ()):
+        return "tags"
+    if appid and re.search(rf"store\.steampowered\.com/app/{int(appid)}\b", description or ""):
+        return "steam link"
+    d = f" {norm(description)} "
+    if len(norm(game)) >= 5 and any(f" {v} " in d for v in _game_variants(game)):
+        return "description"
+    return None
 
 
 def strip_games(text: str, games: list[str]) -> str:
@@ -270,31 +288,40 @@ def fill_channel(c: Candidate, item: dict) -> None:
     c.uploads_pid = item.get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads", "")
 
 
-def analyse(c: Candidate, client, games: list[str]) -> None:
-    """Recent uploads + views -> all per-channel signals (≈2 API units). Raises QuotaExceeded."""
-    c.recent = client.uploads(c.uploads_pid, 30)
+def analyse(c: Candidate, client, games: list[str], n_videos: int = 100, appids: dict | None = None) -> None:
+    """Latest uploads + their views and tags -> all per-channel signals.
+    Cost: 2 units per 50 videos. Raises QuotaExceeded."""
+    appids = appids or {}
+    c.recent = client.uploads(c.uploads_pid, n_videos)
     fresh = [v for v in c.recent if (_age_days(v["published"]) or 0) >= 3]
     hits = [vid for ids in c.hit_videos.values() for vid in ids]
-    want = list(dict.fromkeys([v["video_id"] for v in fresh] + hits))[:50]
-    views = client.video_views(want)
+    details = client.video_details([v["video_id"] for v in c.recent] + hits)
+    views = {k: d["views"] for k, d in details.items() if d.get("views") is not None}
     dates = [d for d in (parse_time(v["published"]) for v in c.recent) if d]
     c.last_upload = max(dates) if dates else None
     vals = [views[v["video_id"]] for v in fresh[:15] if v["video_id"] in views]
     c.median_views = statistics.median(vals) if vals else None
+    every = [views[v["video_id"]] for v in fresh if v["video_id"] in views]
+    c.median_all = statistics.median(every) if every else None
     game_vids = {g: set(ids) for g, ids in c.hit_videos.items()}
     c.key_videos = c.sponsor_videos = 0
+    c.match_sources = Counter()
     for v in c.recent:
+        tags = details.get(v["video_id"], {}).get("tags", [])
         for g in games:
-            if mentions(v["title"], g):
+            src = match_video(v["title"], tags, v["description"], g, appids.get(g))
+            if src:
                 c.matched_games.add(g)
                 game_vids.setdefault(g, set()).add(v["video_id"])
+                c.match_sources[src] += 1
         text = f"{v['title']}\n{v['description']}"
         c.key_videos += bool(KEY_RE.search(text))
         c.sponsor_videos += bool(SPONSOR_RE.search(text))
     c.game_views = {g: [views[i] for i in ids if i in views] for g, ids in game_vids.items()}
     c.game_views = {g: vs for g, vs in c.game_views.items() if vs}
     allv = [x for vs in c.game_views.values() for x in vs]
-    c.genre_ratio = statistics.median(allv) / max(1.0, c.median_views) if allv and c.median_views else None
+    base = c.median_all or c.median_views   # same time window as the game videos
+    c.genre_ratio = statistics.median(allv) / max(1.0, base) if allv and base else None
     c.emails = youtube_emails(c)
     c.links = own_links(c.description, [v["description"] for v in c.recent])
 
@@ -445,7 +472,7 @@ def run(settings: Settings, client, progress=lambda msg, frac=None: None, cancel
         if i % 5 == 0:
             progress(f"Analysing channels ({i}/{len(deep)})…", 0.45 + 0.5 * i / max(1, len(deep)))
         try:
-            analyse(c, client, games)
+            analyse(c, client, games, settings.videos_per_channel, settings.game_appids)
         except QuotaExceeded:
             quota_hit = True
             progress("⚠ Daily YouTube quota used up — ranking what was analysed.")
@@ -492,7 +519,7 @@ def add_channel(channel_id: str, client, settings: Settings, active: list[Candid
         if not items:
             raise InputError("YouTube doesn't know that channel.")
         fill_channel(c, items[0])
-    analyse(c, client, games)
+    analyse(c, client, games, settings.videos_per_channel, settings.game_appids)
     c.added_manually = c.stage != "ranked"
     c.stage = "ranked"
     all_cands[channel_id] = c
@@ -569,9 +596,11 @@ def reasons(c: Candidate) -> list[str]:
                    + (" — the audience likes this genre" if c.genre_ratio >= 1.2
                       else " — the genre underperforms on this channel" if c.genre_ratio < 0.7 else ""))
     if c.matched_games:
-        out.append("Played similar games: " + ", ".join(sorted(c.matched_games)))
+        where = ", ".join(f"{k} {n}" for k, n in c.match_sources.most_common())
+        out.append("Played similar games: " + ", ".join(sorted(c.matched_games))
+                   + (f" (found in: {where})" if where else ""))
     else:
-        out.append("No similar games found in recent video titles")
+        out.append(f"No similar games in their last {len(c.recent)} videos (titles, tags, descriptions)")
     out.append(
         "Content is very close to your game" if s["content"] >= 0.6
         else "Content is partly related to your game" if s["content"] >= 0.3

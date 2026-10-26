@@ -31,7 +31,7 @@ echo "Using: $PY ($("$PY" --version))"
 source .venv-mac/bin/activate
 python -m pip install -q --upgrade pip
 python -m pip install -q -r requirements.txt pyinstaller
-python tests/test_pipeline.py && python tests/test_enrich.py && python tests/test_model.py && python tests/test_embed.py && python tests/test_lookup.py && python tests/test_email_precision.py && python tests/test_explain.py && python tests/test_steam.py
+python tests/test_pipeline.py && python tests/test_enrich.py && python tests/test_model.py && python tests/test_embed.py && python tests/test_lookup.py && python tests/test_email_precision.py && python tests/test_explain.py && python tests/test_steam.py && python tests/test_coverage_sources.py
 python -m PyInstaller --noconfirm --clean --windowed --name CreatorScout \
   --osx-bundle-identifier ro.creatorscout.app --add-data "assets:assets" --collect-data selenium --collect-binaries onnxruntime --collect-binaries tokenizers app.py
 

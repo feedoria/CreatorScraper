@@ -399,6 +399,7 @@ class App(tk.Tk):
         self.v_inactive = tk.StringVar(value=str(self.cfg.get("max_inactive_days", 90)))
         self.v_pages = tk.StringVar(value=str(self.cfg.get("pages_per_query", 1)))
         self.v_deep = tk.StringVar(value=str(self.cfg.get("max_deep", 150)))
+        self.v_videos = tk.StringVar(value=str(self.cfg.get("videos_per_channel", 100)))
         self.v_lang = tk.StringVar(value=self.cfg.get("language", "en"))
         self.v_skip = tk.BooleanVar(value=self.cfg.get("skip_contacted", True))
         grid = ttk.Frame(c, style="Card.TFrame")
@@ -406,7 +407,8 @@ class App(tk.Tk):
         fields = [
             ("MIN SUBSCRIBERS", self.v_min), ("MAX SUBSCRIBERS", self.v_max),
             ("MAX INACTIVE (DAYS)", self.v_inactive), ("PAGES / SEARCH", self.v_pages),
-            ("CHANNELS ANALYSED", self.v_deep), ("LANGUAGE (en / ro / empty)", self.v_lang),
+            ("CHANNELS ANALYSED", self.v_deep), ("VIDEOS PER CHANNEL", self.v_videos),
+            ("LANGUAGE (en / ro / empty)", self.v_lang),
         ]
         for i, (lbl, var) in enumerate(fields):
             grid.columnconfigure(i, weight=1)
@@ -433,6 +435,7 @@ class App(tk.Tk):
         self.t_games.bind("<KeyRelease>", lambda e: self._update_cost())
         self.v_pages.trace_add("write", lambda *a: self._update_cost())
         self.v_deep.trace_add("write", lambda *a: self._update_cost())
+        self.v_videos.trace_add("write", lambda *a: self._update_cost())
 
         bar = ttk.Frame(f)
         bar.columnconfigure(2, weight=1)
@@ -661,6 +664,19 @@ class App(tk.Tk):
         self._tags_dlg = d
         draw()
 
+    def _steam_appids(self, games) -> dict:
+        """Comparable game -> Steam appid; best effort (cached a week, never blocks a search)."""
+        out, sm = {}, steam.Steam(self.store)
+        for g in [x.strip() for x in games if x.strip()]:
+            try:
+                found = sm.find_app(g)
+            except Exception:
+                break          # Steam unreachable: skip the rest
+            norm = lambda t: "".join(ch for ch in t.lower() if ch.isalnum())
+            if found and norm(found[1]) == norm(g):   # exact game only, never a soundtrack/DLC
+                out[g] = found[0]
+        return out
+
     def _search_keywords(self) -> list[str]:
         if not hasattr(self, "v_search_tags") or not self.v_search_tags.get():
             return []
@@ -714,7 +730,8 @@ class App(tk.Tk):
         n = len(_lines(self.t_games.get("1.0", "end"))) + len(self._search_keywords())
         pages = _int(self.v_pages.get(), 1)
         deep = _int(self.v_deep.get(), 150)
-        units = n * pages * 100 + 2 * deep + 10
+        vids = max(10, min(500, _int(self.v_videos.get(), 100)))
+        units = n * pages * 100 + deep * 2 * -(-vids // 50) + 10
         warn = "  ⚠ over the daily quota" if units > 10_000 else ""
         self.l_cost.config(text=f"Estimated cost ≈ {units:,} / 10,000 units today{warn}  ·  repeat runs are free from cache")
 
@@ -1205,6 +1222,7 @@ class App(tk.Tk):
             max_inactive_days=_int(self.v_inactive.get(), 90),
             pages_per_query=max(1, min(5, _int(self.v_pages.get(), 1))),
             max_deep=max(10, min(1000, _int(self.v_deep.get(), 150))),
+            videos_per_channel=max(10, min(500, _int(self.v_videos.get(), 100))),
             language=self.v_lang.get().strip().lower(),
             skip_contacted=self.v_skip.get(),
             enrich=self.v_enrich.get(),
@@ -1257,6 +1275,7 @@ class App(tk.Tk):
             min_subs=cfg["min_subs"], max_subs=cfg["max_subs"],
             max_inactive_days=cfg["max_inactive_days"],
             pages_per_query=cfg["pages_per_query"], max_deep=cfg["max_deep"],
+            videos_per_channel=cfg["videos_per_channel"],
             language=cfg["language"],
             use_semantic=cfg["semantic"],
             exclude_ids=self.store.contacted_ids() if cfg["skip_contacted"] else set(),
@@ -1272,6 +1291,8 @@ class App(tk.Tk):
         def work():
             try:
                 prog = lambda m, fr=None: self.q.put(("progress", m, fr))
+                prog("Looking up your comparable games on Steam (to spot store links in descriptions)…", 0.0)
+                st.game_appids = self._steam_appids(st.comparable_games)
                 ranked, stats = scout.run(st, client, prog, self.cancel, embedder_loader=self._load_embedder)
                 stats["enrich"] = None
                 if cfg["enrich"] and cfg["enrich_top"] > 0 and ranked and not self.cancel.is_set():

@@ -10,8 +10,12 @@ NOW = datetime.now(timezone.utc)
 iso = lambda d: (NOW - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+APPIDS = {g: 100000 + i for i, g in enumerate(GAMES)}
+
+
 class World:
-    def __init__(self, seed=1, n=120):
+    def __init__(self, seed=1, n=120, n_videos=30, rich=False):
+        """rich=True: long channels where coverage is often old, only in tags, or only a Steam link."""
         rnd = random.Random(seed)
         self.ch = {}
         for i in range(n):
@@ -25,15 +29,26 @@ class World:
                 covered = [rnd.choice(GAMES)] if rnd.random() < 0.6 else []
             last = rnd.choice([1, 3, 8, 20, 45]) if rnd.random() < 0.9 else 200
             vids = []
-            for j in range(30):
-                if j < len(covered):
-                    t, v = f"{covered[j]} gameplay part {j + 1}", med * (rnd.uniform(1.3, 2.6) if love else rnd.uniform(0.4, 0.9))
+            slots = rnd.sample(range(n_videos), len(covered)) if rich else list(range(len(covered)))
+            for j in range(n_videos):
+                tags, extra = [], ""
+                if j in slots:
+                    game = covered[slots.index(j)]
+                    v = med * (rnd.uniform(1.3, 2.6) if love else rnd.uniform(0.4, 0.9))
+                    style = rnd.random() if rich else 0.0
+                    if style < 0.45:
+                        t = f"{game} gameplay part {j + 1}"
+                    elif style < 0.8:
+                        t, tags = rnd.choice(["This game is INSANE", "I can't stop playing this", "Day 100"]), [game, "gameplay"]
+                    else:
+                        t, extra = "New favourite game?!", f" Get it: https://store.steampowered.com/app/{APPIDS[game]}/"
                 else:
                     t = rnd.choice(["new indie digging simulator", "mining game with drills and ore", "underground cave crafting"]
                                    if love and rnd.random() < 0.5 else OTHER)
                     v = med * rnd.uniform(0.6, 1.4)
-                d = "Thanks to the devs for the key!" if keys and j == 2 else "Like and subscribe"
-                vids.append({"id": f"{cid}_{j}", "title": t, "desc": d, "views": int(v), "age": last + j * 4})
+                d = ("Thanks to the devs for the key!" if keys and j == 2 else "Like and subscribe") + extra
+                vids.append({"id": f"{cid}_{j}", "title": t, "desc": d, "views": int(v), "age": last + j * 4,
+                             "tags": tags, "game": covered[slots.index(j)] if j in slots else None})
             self.ch[cid] = {"title": f"Channel{i}", "subs": subs, "love": love, "keys": keys, "covered": covered,
                             "desc": "Indie games, simulators and digging" if love else "Gaming and fun",
                             "vids": vids}
@@ -69,11 +84,17 @@ class Session:
             return R({"items": out})
         if ep == "playlistItems":
             c = w.ch[params["playlistId"][2:]]
-            return R({"items": [{"snippet": {"title": v["title"], "description": v["desc"]},
-                                 "contentDetails": {"videoId": v["id"], "videoPublishedAt": iso(v["age"])}} for v in c["vids"]]})
+            start = int(params.get("pageToken", 0)); end = start + int(params.get("maxResults", 50))
+            body = {"items": [{"snippet": {"title": v["title"], "description": v["desc"]},
+                               "contentDetails": {"videoId": v["id"], "videoPublishedAt": iso(v["age"])}}
+                              for v in c["vids"][start:end]]}
+            if end < len(c["vids"]):
+                body["nextPageToken"] = str(end)
+            return R(body)
         if ep == "videos":
             items = []
             for vid in params["id"].split(","):
-                cid, j = vid.split("_"); items.append({"id": vid, "statistics": {"viewCount": str(w.ch[cid]["vids"][int(j)]["views"])}})
+                cid, j = vid.split("_"); v = w.ch[cid]["vids"][int(j)]
+                items.append({"id": vid, "snippet": {"tags": v.get("tags", [])}, "statistics": {"viewCount": str(v["views"])}})
             return R({"items": items})
         return R({"error": {"errors": [{"reason": "notFound"}], "message": "nf"}}, 404)

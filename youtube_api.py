@@ -125,25 +125,31 @@ class YouTubeClient:
             out.extend(body.get("items", []))
         return out
 
-    def uploads(self, playlist_id: str, n: int = 30) -> list[dict]:
+    def uploads(self, playlist_id: str, n: int = 100) -> list[dict]:
+        """The channel's latest `n` uploads, newest first (1 unit per 50 videos)."""
         if not playlist_id:
             return []
-        body = self._get(
-            "playlistItems",
-            {"part": "snippet,contentDetails", "playlistId": playlist_id, "maxResults": min(50, n)},
-        )
-        out = []
-        for it in body.get("items", []):
-            sn, cd = it.get("snippet", {}), it.get("contentDetails", {})
-            out.append(
-                {
-                    "video_id": cd.get("videoId"),
-                    "title": sn.get("title", ""),
-                    "description": sn.get("description", ""),
-                    "published": cd.get("videoPublishedAt") or sn.get("publishedAt"),
-                }
-            )
-        return out
+        out, token = [], None
+        while len(out) < n:
+            params = {"part": "snippet,contentDetails", "playlistId": playlist_id,
+                      "maxResults": min(50, n - len(out))}
+            if token:
+                params["pageToken"] = token
+            body = self._get("playlistItems", params)
+            for it in body.get("items", []):
+                sn, cd = it.get("snippet", {}), it.get("contentDetails", {})
+                out.append(
+                    {
+                        "video_id": cd.get("videoId"),
+                        "title": sn.get("title", ""),
+                        "description": sn.get("description", ""),
+                        "published": cd.get("videoPublishedAt") or sn.get("publishedAt"),
+                    }
+                )
+            token = body.get("nextPageToken")
+            if not token or not body.get("items"):
+                break
+        return out[:n]
 
     # ---- resolving one channel (for "have I contacted them?") -------------
     @staticmethod
@@ -177,18 +183,24 @@ class YouTubeClient:
             return []
         return [self._brief(i) for i in items]
 
-    def video_views(self, ids: list[str]) -> dict[str, int]:
-        views = {}
-        ids = [i for i in ids if i]
+    def video_details(self, ids: list[str]) -> dict[str, dict]:
+        """{video_id: {"views": int|None, "tags": [...]}} — snippet+statistics in one
+        call, still 1 unit per 50 videos. Tags are what creators type in YouTube Studio
+        and usually include the game's name."""
+        out = {}
+        ids = [i for i in dict.fromkeys(ids) if i]
         for i in range(0, len(ids), 50):
             body = self._get(
-                "videos", {"part": "statistics", "id": ",".join(ids[i : i + 50]), "maxResults": 50}
+                "videos", {"part": "snippet,statistics", "id": ",".join(ids[i : i + 50]), "maxResults": 50}
             )
             for it in body.get("items", []):
                 v = it.get("statistics", {}).get("viewCount")
-                if v is not None:
-                    views[it["id"]] = int(v)
-        return views
+                out[it["id"]] = {"views": int(v) if v is not None else None,
+                                 "tags": it.get("snippet", {}).get("tags", []) or []}
+        return out
+
+    def video_views(self, ids: list[str]) -> dict[str, int]:
+        return {k: d["views"] for k, d in self.video_details(ids).items() if d["views"] is not None}
 
 
 def _error_reason(r) -> tuple[str, str]:
