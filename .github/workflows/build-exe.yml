@@ -1,0 +1,21 @@
+name: Build Windows exe
+on: [workflow_dispatch, push]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python tests/test_pipeline.py
+      - run: python tests/test_enrich.py
+      - run: python tests/test_model.py
+      - run: python tests/test_embed.py
+      - run: python tests/test_lookup.py
+      - run: python tests/test_email_precision.py
+      - run: python tests/test_explain.py
+      - run: python tests/test_steam.py
+      - run: python -m PyInstaller --noconfirm --onefile --windowed --name CreatorScout --icon assets/icon.ico --add-data "assets;assets" --collect-data selenium --collect-binaries onnxruntime --collect-binaries tokenizers app.py
+      - uses: actions/upload-artifact@v4
+        with: { name: CreatorScout-exe, path: dist/CreatorScout.exe }

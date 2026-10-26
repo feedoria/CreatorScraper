@@ -1,0 +1,79 @@
+"""A simulated YouTube with a known truth, answering in the real API's JSON format."""
+import random
+from datetime import datetime, timedelta, timezone
+
+GAMES = ["Hydroneer", "SteamWorld Dig", "Dome Keeper", "Deep Rock Galactic", "Mining Mechanics",
+         "A Game About Digging A Hole"]
+OTHER = ["Minecraft survival", "Barbie dreamhouse tour", "GTA 6 news", "Stardew Valley farm",
+         "Fortnite season recap", "cozy cafe simulator", "Elden Ring boss", "Roblox obby"]
+NOW = datetime.now(timezone.utc)
+iso = lambda d: (NOW - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class World:
+    def __init__(self, seed=1, n=120):
+        rnd = random.Random(seed)
+        self.ch = {}
+        for i in range(n):
+            cid = f"UC{i:04d}"
+            love = rnd.random() < 0.35
+            keys = rnd.random() < (0.45 if love else 0.1)
+            subs = int(10 ** rnd.uniform(3.2, 6.2))
+            med = subs * rnd.uniform(0.04, 0.35)
+            covered = [g for g in GAMES if rnd.random() < (0.45 if love else 0.04)]
+            if not covered:                        # everybody was found through at least one game
+                covered = [rnd.choice(GAMES)] if rnd.random() < 0.6 else []
+            last = rnd.choice([1, 3, 8, 20, 45]) if rnd.random() < 0.9 else 200
+            vids = []
+            for j in range(30):
+                if j < len(covered):
+                    t, v = f"{covered[j]} gameplay part {j + 1}", med * (rnd.uniform(1.3, 2.6) if love else rnd.uniform(0.4, 0.9))
+                else:
+                    t = rnd.choice(["new indie digging simulator", "mining game with drills and ore", "underground cave crafting"]
+                                   if love and rnd.random() < 0.5 else OTHER)
+                    v = med * rnd.uniform(0.6, 1.4)
+                d = "Thanks to the devs for the key!" if keys and j == 2 else "Like and subscribe"
+                vids.append({"id": f"{cid}_{j}", "title": t, "desc": d, "views": int(v), "age": last + j * 4})
+            self.ch[cid] = {"title": f"Channel{i}", "subs": subs, "love": love, "keys": keys, "covered": covered,
+                            "desc": "Indie games, simulators and digging" if love else "Gaming and fun",
+                            "vids": vids}
+
+    def session(self):
+        return Session(self)
+
+
+class R:
+    def __init__(self, body, code=200): self.status_code, self._b, self.text = code, body, ""
+    def json(self): return self._b
+
+
+class Session:
+    def __init__(self, w): self.w = w
+    def get(self, url, params, timeout):
+        ep = url.rsplit("/", 1)[1]; w = self.w
+        if ep == "search":
+            game = params["q"].replace(" gameplay", "")
+            items = []
+            for cid, c in w.ch.items():
+                for v in c["vids"]:
+                    if v["title"].startswith(game + " "):
+                        items.append({"id": {"videoId": v["id"]}, "snippet": {"channelId": cid, "channelTitle": c["title"], "title": v["title"]}})
+            return R({"items": items[:50]})
+        if ep == "channels":
+            out = []
+            for cid in params["id"].split(","):
+                c = w.ch[cid]
+                out.append({"id": cid, "snippet": {"title": c["title"], "description": c["desc"]},
+                            "statistics": {"subscriberCount": str(c["subs"]), "viewCount": "1", "videoCount": "30"},
+                            "contentDetails": {"relatedPlaylists": {"uploads": "UU" + cid}}, "brandingSettings": {"channel": {}}})
+            return R({"items": out})
+        if ep == "playlistItems":
+            c = w.ch[params["playlistId"][2:]]
+            return R({"items": [{"snippet": {"title": v["title"], "description": v["desc"]},
+                                 "contentDetails": {"videoId": v["id"], "videoPublishedAt": iso(v["age"])}} for v in c["vids"]]})
+        if ep == "videos":
+            items = []
+            for vid in params["id"].split(","):
+                cid, j = vid.split("_"); items.append({"id": vid, "statistics": {"viewCount": str(w.ch[cid]["vids"][int(j)]["views"])}})
+            return R({"items": items})
+        return R({"error": {"errors": [{"reason": "notFound"}], "message": "nf"}}, 404)

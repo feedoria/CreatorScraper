@@ -1,0 +1,11 @@
+# Python / build
+__pycache__/
+.venv*/
+build/
+dist/
+*.spec
+CreatorScout.exe
+
+# never commit exported creator lists (contain emails = personal data)
+*.csv
+errors.log
