@@ -33,8 +33,10 @@ CreatorScout is a Windows desktop app built for indie game marketing. You descri
 
 | | |
 |---|---|
-| ![Your game](docs/screenshots/your-game.png) | ![Email review](docs/screenshots/email-review.png) |
-| ![Contacts](docs/screenshots/contacts.png) | ![Steam tags](docs/screenshots/steam-tags.png) |
+| ![Your game](docs/screenshots/your-game.png) | ![Steam tags](docs/screenshots/steam-tags.png) |
+| ![Contacts](docs/screenshots/contacts.png) | |
+
+*Emails in the screenshots are blurred.*
 
 ---
 

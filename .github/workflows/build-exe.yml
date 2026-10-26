@@ -3,19 +3,34 @@ on: [workflow_dispatch, push]
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"            # Windows consoles default to cp1252; tests print ✓ → etc.
+      PYTHONIOENCODING: "utf-8"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install -r requirements.txt pyinstaller
-      - run: python tests/test_pipeline.py
-      - run: python tests/test_enrich.py
-      - run: python tests/test_model.py
-      - run: python tests/test_embed.py
-      - run: python tests/test_lookup.py
-      - run: python tests/test_email_precision.py
-      - run: python tests/test_explain.py
-      - run: python tests/test_steam.py
-      - run: python -m PyInstaller --noconfirm --onefile --windowed --name CreatorScout --icon assets/icon.ico --add-data "assets;assets" --collect-data selenium --collect-binaries onnxruntime --collect-binaries tokenizers app.py
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+      - name: Test — pipeline
+        run: python tests/test_pipeline.py
+      - name: Test — integration
+        run: python tests/test_integration.py
+      - name: Test — coverage model
+        run: python tests/test_model.py
+      - name: Test — semantic model (downloads the real MiniLM here)
+        run: python tests/test_embed.py
+      - name: Test — email search on creators' pages
+        run: python tests/test_enrich.py
+      - name: Test — email precision
+        run: python tests/test_email_precision.py
+      - name: Test — contacts lookup
+        run: python tests/test_lookup.py
+      - name: Test — why isn't X in the list
+        run: python tests/test_explain.py
+      - name: Test — Steam tags
+        run: python tests/test_steam.py
+      - name: Build CreatorScout.exe
+        run: python -m PyInstaller --noconfirm --onefile --windowed --name CreatorScout --icon assets/icon.ico --add-data "assets;assets" --collect-data selenium --collect-binaries onnxruntime --collect-binaries tokenizers app.py
       - uses: actions/upload-artifact@v4
         with: { name: CreatorScout-exe, path: dist/CreatorScout.exe }
