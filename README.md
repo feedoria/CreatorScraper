@@ -1,123 +1,169 @@
 # CreatorScout
 
-Găsește și clasează YouTuberii potriviți pentru promovarea unui joc indie, după cât de aproape le e conținutul de joc. Folosește API-ul oficial YouTube Data v3, fără scraping și fără Selenium.
+**Find the YouTube creators most likely to cover your indie game, ranked by how many views a single pitch is expected to bring, with the public contact details to reach them.**
 
-## Pornire rapidă (Mac)
+CreatorScout is a Windows desktop app built for indie game marketing. You describe your game and a few comparable games. It searches YouTube through the official API, analyses every channel it finds, learns what predicts coverage in your genre, and gives you a ranked, explainable shortlist you can export to CSV.
 
-1. Dublu-click pe **`Build app (Mac).command`**. Terminalul se deschide **o singură dată**, timp de 1–3 minute, cât se construiește aplicația. La final se deschide singură **CreatorScout.app**, pe care o găsești de acum în `~/Applications` (o poți trage și în Dock).
-   - Dacă macOS spune că fișierul nu poate fi deschis: click dreapta → Open → Open.
-2. De acum încolo deschizi doar **CreatorScout.app**, ca pe orice aplicație.
+![Results](docs/screenshots/results.png)
 
-## Pornire rapidă (Windows)
+---
 
-1. **Obține .exe-ul**: dublu-click pe `build_exe.bat`. Prima dată durează 1–3 minute. La final apare `CreatorScout.exe` în același folder, iar de atunci încolo rulezi doar exe-ul.
-   - Ai nevoie de Python 3.10+ instalat ([python.org](https://www.python.org/downloads/)), cu „Add python.exe to PATH” bifat. Doar pentru build: exe-ul final rulează și pe calculatoare fără Python.
-   - Alternativ, rulezi direct din cod cu `run_from_source.bat`.
-2. **Cheia API** (gratuită): tab-ul **Setări** din aplicație are pașii. Pe scurt: Google Cloud Console → proiect nou → activezi *YouTube Data API v3* → Credentials → API key.
-3. **Tab-ul 1. Jocul**: completezi descrierea jocului (în engleză, ca pe Steam), 5–15 jocuri comparabile și, opțional, câteva cuvinte-cheie. Apoi **Caută și clasează**.
-4. **Tab-ul 2. Rezultate**: lista ordonată, cu top N evidențiat. Click pe un rând arată de ce are scorul respectiv, emailurile publice, linkurile și ultimele video-uri. De acolo poți copia emailul sau un draft personalizat, marca un creator ca „contactat” și exporta CSV.
+## Features
 
-## Cum se calculează scorul (0–100)
+- **Discovery from comparable games.** It finds the channels that already played games like yours, which is the strongest signal of interest.
+- **Prediction for every creator:**
+  - **Coverage chance:** how likely a channel like this is to cover a game like yours.
+  - **Predicted views:** what a video about your game would probably get.
+  - **Expected views per pitch:** chance × predicted views × reachability. This is the default sort order.
+- **A self-calibrating model.** Each search trains a small model on the public YouTube coverage of your genre, so the weights fit your niche instead of being hard-coded.
+- **Semantic matching** with a pretrained sentence-embedding model (MiniLM), combined with TF-IDF keyword matching.
+- **Explanations.** Every creator shows what pushed the prediction up or down, which similar games they played, and how those videos performed.
+- **Public contact details:**
+  - emails from YouTube descriptions, plus the creator's own Linktree or website (with a headless-browser fallback for JavaScript pages);
+  - every email rated High / Medium / Low with a reason, and helpdesk, merch and platform addresses rejected automatically;
+  - a fast manual review mode (`V` = OK, `X` = wrong, `O` = open the page where it was found), remembered across runs.
+- **Contacts tracker.** Paste any YouTube link, @handle or name to see instantly whether you've already contacted that creator. Includes notes and CSV export.
+- **"Why isn't X in the list?"** It explains exactly where a channel dropped out, and can analyse and add it on demand.
+- **Steam tags as keywords:**
+  - pull tags from your game's Steam page, or the tags your comparable games share;
+  - browse the full Steam tag list;
+  - add your own keywords.
+- **Search, sort and filter** by any column. Natural A–Z sort, subscribers, contacted date, email confidence.
+- **Quota-aware.** The free YouTube quota is 10,000 units a day. A full search costs about 800–1,500 units, and repeat runs are almost free thanks to a local cache.
 
-| Componentă | Pondere | Ce măsoară |
-|---|---|---|
-| Conținut | 35% | Similaritate TF-IDF între descrierea jocului și titlul, descrierea și titlurile recente ale canalului |
-| Jocuri similare | 30% | Câte jocuri comparabile a jucat (1 → 0.5, 2 → 0.75, 3 → 0.875…) |
-| Mărime | 15% | 3k–100k abonați = ideal pentru indie; scade spre 100 și spre 5M |
-| Engagement | 10% | Views median pe ultimele ~15 video-uri raportat la abonați |
-| Activitate | 10% | A postat în ultimele 14 zile = maxim; scade până la 120 de zile |
+| | |
+|---|---|
+| ![Your game](docs/screenshots/your-game.png) | ![Email review](docs/screenshots/email-review.png) |
+| ![Contacts](docs/screenshots/contacts.png) | ![Steam tags](docs/screenshots/steam-tags.png) |
 
-Pe lângă asta, **canalele off-topic sunt penalizate** (până la ×0.35): un canal mare și activ care nu are legătură cu jocul nu ajunge sus.
+---
 
-Filtre dure: intervalul de abonați, inactivitatea maximă și (opțional) excluderea celor deja contactați.
+## How it works
 
-## Cota API
+```
+Your game + comparable games
+  └─ 1. Discover      search.list "<game> gameplay"          (100 units per game)
+  └─ 2. Channels      channels.list, subscriber filter       (1 unit per 50 channels)
+  └─ 3. Analyse       last 30 uploads + their views          (~2 units per channel)
+  └─ 4. Signals       TF-IDF + MiniLM, similar games, genre performance,
+                      accepted dev keys, size, engagement, activity
+  └─ 5. Predict       logistic regression trained on this genre's public coverage
+  └─ 6. Emails        descriptions → creator's own links → manual review
+  └─ Results          ranked table, explanations, CSV export
+```
 
-10.000 de unități pe zi, gratuit. O căutare costă 100 de unități, analiza unui canal aproximativ 2. Aplicația îți arată costul estimat înainte de rulare. Tot ce descarcă intră în cache local (3–7 zile), așa că dacă repeți căutarea sau schimbi doar filtrele nu mai consumi nimic. Dacă cota se termină la jumătate, primești totuși clasamentul cu ce a apucat să adune.
+### The coverage model
 
-Ca să găsești **mai mulți** creatori: adaugă mai multe jocuri comparabile (fiecare aduce alți oameni) sau crește „Pagini / căutare” (fiecare pagină = încă 50 de video-uri, 100 de unități).
+There is no public dataset of "which creators cover which indie games", so the app builds one from YouTube itself on every search:
 
-## Ce date de contact găsește (și ce nu)
+1. **Hide one game, learn, repeat.** For each comparable game it already knows which analysed channels covered it. It hides one game at a time, computes every channel's signals *without* that game, and learns which signals predict that the channel covered it (leave-one-game-out labels).
+2. **Correct for discovery bias.** Every channel was found *through* some game. When the hidden game is the one a channel was found through, that channel looks like it covered the game "with no other evidence". So, for each hidden game, the model only learns from channels that would have been found without it.
+3. **Fit the model.** It is an L2-regularised logistic regression on standardised signals, written in plain Python. It trains in under a second.
+4. **Fall back when needed.** If there is too little data, it uses sensible default weights and says so.
+5. **Guard against off-topic channels.** A relevance factor keeps big off-topic channels from riding on size alone.
 
-- **Da**: emailurile pe care creatorul le-a scris public în descrierea canalului sau a video-urilor (inclusiv forme ca `nume [at] gmail [dot] com`), plus linkuri către Twitter/X, Discord, Linktree, Twitch etc.
-- **Nu**: emailul din butonul „View email address” din About. YouTube îl ascunde intenționat în spatele unui login + CAPTCHA, iar ocolirea lui încalcă termenii YouTube. Pentru canalele din top fără email, îl vezi manual în 10 secunde, sau scrii pe Twitter/Discord.
+On simulated data with a known ground truth, the model is well calibrated: when it predicts 52%, the true rate is 49%. Its AUC is 0.78, close to the theoretical best of 0.80. In a genre where the default intuitions are wrong, it learns the right direction by itself and beats the default weights.
 
-## Recomandări de folosire
+### Semantic matching
 
-- **Trimite manual, personalizat, puțini oameni.** 30–50 de mailuri bine țintite bat 1.000 de mailuri generice. Mass-mailingul ajunge în spam și strică reputația domeniului. Draft-ul generat e doar un punct de plecare: adaugă o frază despre un video anume al creatorului.
-- Datele personale (emailuri) sunt sub GDPR: le folosești doar pentru outreach, nu le vinzi și nu le publici, iar dacă cineva cere să nu mai fie contactat, îl marchezi și îl lași în pace.
-- Folosește în paralel Keymailer / Woovit / Lurkit pentru distribuirea de key-uri.
+Content similarity combines TF-IDF (implemented from scratch, game names removed so they are not double-counted) with **all-MiniLM-L6-v2**, a pretrained sentence-embedding model. It runs as a quantised ONNX model through `onnxruntime`, with no PyTorch, and is downloaded once (~23 MB). If it is unavailable, the app falls back to TF-IDF only.
 
-## Structura codului
+### Email precision
 
-- `app.py`: interfața (Tkinter, inclus în Python, deci exe-ul iese mic)
-- `scout.py`: pipeline-ul (discovery → îmbogățire → scoring → explicații), separat de UI și testabil
-- `youtube_api.py`: clientul API, cu cache, retry și contorizarea cotei
-- `contacts.py`: extragerea emailurilor și linkurilor publice
-- `storage.py`: SQLite (cache, istoric contactați) și setări JSON în `%APPDATA%\CreatorScout`
-- `tests/test_pipeline.py`: test cap-coadă cu un API YouTube simulat (`python tests/test_pipeline.py`)
-- `.github/workflows/build-exe.yml`: dacă urci proiectul pe GitHub, exe-ul se construiește automat (tab-ul Actions → artefactul *CreatorScout-exe*)
+- **Only the creator's own links are followed:** links in the channel description, or links repeated in at least 3 video descriptions (their standard footer). One-off links in a single video (sponsors, game pages) are ignored.
+- **Clearly unrelated addresses are dropped:** helpdesks, game companies, platforms, and `support@`, `merch@`, `orders@`, `noreply@` and similar.
+- **Every remaining email gets a confidence level:**
+  - **High:** it contains the channel's name, is on the creator's own domain, or is written in their channel description with business context.
+  - **Medium:** a personal mailbox or an agency address without a name match.
+  - **Low:** an unrelated domain.
+- **The YouTube About-tab email stays manual.** It sits behind a CAPTCHA and is never bypassed; the **Reveal email** button opens it so you can copy it by hand.
 
-## Pivotul spre joburi (mai târziu)
+---
 
-`scout.py` e deja generic ca idee: „ordonează entități după cât de aproape le e textul de un profil”. Pentru joburi înlocuiești `youtube_api.py` cu o sursă de anunțuri, descrierea jocului cu CV-ul și „jocurile comparabile” cu skill-urile cheie.
+## Getting started
 
-## Găsirea emailurilor pentru creatorii fără email public
+### 1. YouTube API key (free, ~3 minutes)
 
-Aplicația are trei niveluri, în ordine:
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create (or pick) a project.
+2. Go to **APIs & Services → Library**, search for **YouTube Data API v3** and click **Enable**.
+3. Go to **Credentials → Create credentials → API key**.
+4. Optional but recommended: **Edit API key → API restrictions → Restrict key**, then tick only YouTube Data API v3.
+5. Paste the key into the app's **Settings** page.
 
-1. **Descrierile YouTube** (automat): emailurile scrise în descrierea canalului și a video-urilor.
-2. **Linkurile creatorului** (automat, `enrich.py`): pentru creatorii din top N fără email, aplicația vizitează Linktree / Beacons / Carrd și site-ul personal (plus pagina Contact/About), cu `requests`. Respectă `robots.txt`, vizitează maximum câteva pagini per creator și ține rezultatele în cache 7 zile. Nu atinge X/Twitter, Instagram sau TikTok.
-   - **Browser fallback (Selenium):** pentru paginile construite din JavaScript, deschide un Edge (sau Chrome) ascuns și citește pagina după ce s-a încărcat. La prima folosire, Selenium descarcă automat driver-ul potrivit, deci e nevoie de internet.
-3. **Reveal email** (manual): butonul deschide pagina About a canalului. Dai click pe „View email address”, rezolvi CAPTCHA-ul, lipești emailul în aplicație și rămâne salvat pentru rulările următoare.
+### 2. Build the app (Windows)
 
-În tabel și în CSV, coloana **FOUND ON / email_found_on** arată de unde vine emailul: `YouTube`, `Linktree`, `website`, `browser` sau `manual`.
+Double-click **`build_exe.bat`**. It:
 
-## Predicția (cum sunt clasați creatorii)
+- picks a compatible Python (3.10–3.13, which the ML libraries need);
+- creates a virtual environment and installs the dependencies;
+- builds **`CreatorScout.exe`** with PyInstaller.
 
-Fiecare creator primește trei cifre:
+On newer Python versions without `onnxruntime` wheels, it still builds, just without the semantic model.
 
-- **Coverage chance:** cât de probabil e ca un canal ca ăsta să acopere un joc ca al tău.
-- **Predicted views:** câte views ar avea probabil un video despre joc. Se calculează ca mediana canalului × cât de bine îi merg video-urile cu jocuri similare.
-- **Expected views per pitch:** chance × predicted views × un factor de „reachability”. Canalele mari primesc 30–100 de pitch-uri pe zi, deci șansa să ți-l citească pe al tău e mai mică.
+You can also run from source with `run_from_source.bat`, or `python app.py` after `pip install -r requirements.txt`.
 
-**Coverage chance** vine dintr-un model (`model.py`) antrenat **la fiecare căutare**, pe datele publice YouTube ale genului tău. Modelul ascunde pe rând câte un joc comparabil și învață ce semnale prezic cine l-a acoperit: conținut (cuvinte cheie + model semantic preantrenat MiniLM), jocuri similare jucate, views pe jocuri similare, dacă a mai acceptat key-uri de la dezvoltatori, mărime, engagement și activitate. Tehnic e o regresie logistică cu regularizare L2, cu corecție pentru eroarea de selecție (fiecare canal a fost găsit *printr-un* joc). Dacă datele nu ajung, folosește ponderi implicite și o spune.
+On **macOS**, run `Build app (Mac).command`.
 
-**Modelul semantic** (`embed.py`): all-MiniLM-L6-v2 în format ONNX, cuantizat (~23 MB). Se descarcă o singură dată, la prima căutare, sau din Settings → Download now. Dacă nu se poate încărca, aplicația merge mai departe doar cu TF-IDF.
+Every push to GitHub also builds the `.exe` automatically: see **Actions → latest run → Artifacts**.
 
-Testele (`tests/test_model.py`, `tests/test_integration.py`) rulează modelul pe „lumi” simulate cu adevăr cunoscut. Verifică că își recunoaște tiparele, că probabilitățile sunt calibrate și că bate ponderile implicite atunci când intuițiile implicite sunt greșite.
+### 3. Use it
 
-## Căutare, sortare și Contacts
+1. **Your game:** fill in the name and a Steam-style description, list 5–15 comparable games, and pick keywords or Steam tags.
+2. **FIND & RANK.**
+3. **Results:** sort, search, open a creator to see why they rank where they do, and review emails.
+4. **Export CSV:** send personalised emails by hand, using the generated draft as a starting point.
 
-- **Results → Search:** filtrează după nume, @handle, email sau un link de canal lipit.
-- **Sortare:** din meniul „Sort by” (inclusiv A–Z și după abonați) sau cu click pe orice antet de coloană; al doilea click inversează ordinea (▲/▼).
-- **Coloana CONTACTED** arată data la care ai marcat creatorul.
-- **Contacts → Have I contacted them?:** lipești orice (link de canal, link de video sau Shorts, @handle, nume) și vezi imediat dacă l-ai contactat. Întâi se caută offline în lista ta; dacă nu-l găsește, întreabă YouTube cine e (1–2 unități; o căutare după nume costă 100). Dacă nu l-ai contactat, îl poți marca direct de acolo, chiar dacă nu a apărut în rezultate.
-- Lista de contactați are căutare, notițe („sent key on 12 Oct”), ștergere și export CSV.
+---
 
-## Precizia emailurilor și verificarea manuală
+## Data & privacy
 
-- **Linkuri urmărite:** doar cele din descrierea canalului și cele care se repetă în cel puțin 3 descrieri de video (footer-ul creatorului). Un link care apare într-un singur video (sponsor, pagina unui joc, alt creator) nu e urmărit.
-- **Emailuri respinse automat:** helpdesk-uri (zendesk, freshdesk…), platforme și companii de jocuri, plus adrese de tip support@, merch@, orders@, noreply@ etc.
-- **Încredere (coloana EMAIL CHECK):**
-  - **High:** emailul conține numele canalului, e pe domeniul site-ului propriu sau e scris în descrierea canalului cu context de business.
-  - **Medium:** mailbox personal sau agenție, dar fără nume care să se potrivească.
-  - **Low · check:** domeniu fără legătură cu creatorul.
-- **Verificare:** Show → „Emails to check” aduce coloanele de email în față. **V** = email OK, **X** = email greșit, **O** = deschide pagina pe care a fost găsit. După fiecare decizie trece singur la următorul. Deciziile se țin minte la rulările următoare: emailurile respinse nu mai apar, cele aprobate rămân „✓ verified”.
-- Dacă browser fallback-ul nu pornește, motivul exact e scris în `%APPDATA%\CreatorScout\errors.log`.
+- **It uses only public data:** the official YouTube Data API and public pages the creator links to. It respects `robots.txt` and never bypasses CAPTCHAs or logins.
+- **Everything is stored locally** in `%APPDATA%\CreatorScout\`: the API key, cache, contacted list and email reviews. None of it is in the repository.
+- **Exported CSVs contain personal data (emails)** and are git-ignored. Use them only for outreach, and honour any request not to be contacted (GDPR).
+- **Send emails one by one, personalised.** Bulk mailing gets flagged as spam and doesn't work for indie outreach anyway.
 
-## De ce lipsește un creator + adăugare manuală
+---
 
-Scrii numele, @handle-ul sau linkul canalului în **Results → Search**. Dacă nu există o potrivire exactă, apare o bară cu:
-- **Why isn't it here?:** spune exact unde a căzut canalul. Poate să nu-l fi găsit nicio căutare, să fie în afara intervalului de abonați, să nu fi fost printre cele analizate sau să fie inactiv. Poate fi și exclus pentru că e deja contactat.
-- **Add to results:** analizează canalul (~3 unități) și îl bagă în clasament. Apare cu ✚ în față.
+## Tests
 
-Numele jocurilor sunt recunoscute acum și când titlul conține toate cuvintele importante ale numelui (de exemplu „Digging a Hole” → „A Game About Digging A Hole”).
+```
+python tests/test_pipeline.py        # ranking, filters, quota cost, cache, quota exhaustion
+python tests/test_integration.py     # full pipeline on a simulated YouTube with known ground truth
+python tests/test_model.py           # calibration, AUC vs. theoretical best, learns when defaults are wrong
+python tests/test_embed.py           # tokenizer → ONNX → mean pooling → cosine
+python tests/test_enrich.py          # Linktree, contact pages, Cloudflare emails, robots.txt, JS pages
+python tests/test_email_precision.py # real-world false positives (helpdesk, merch, sponsor links)
+python tests/test_lookup.py          # every YouTube link format, DB migration, API resolution
+python tests/test_explain.py         # "why isn't X in the list?", adding a channel by hand
+python tests/test_steam.py           # Steam store tags, SteamSpy fallback, full tag list
+```
 
-## Keywords & Steam tags
+The tests run against a simulated YouTube API that answers in the real JSON format, so no API key or internet connection is needed.
 
-- **Get tags:** lipești linkul de Steam (sau scrii numele) jocului tău și apar tag-urile lui de pe Steam.
-- **From comparable games:** adună tag-urile jocurilor comparabile. Numărul de lângă fiecare tag arată câte dintre ele îl au.
-- **Click** pe un tag îl selectează sau îl deselectează. **Click dreapta** îl șterge. **+ Add keyword** adaugă unul manual (poți pune mai multe, separate prin virgulă).
-- Tag-urile selectate sunt folosite **gratuit** la potrivirea conținutului (TF-IDF + model semantic). Doar dacă bifezi „Also search YouTube…” devin și căutări YouTube, la 100 de unități fiecare.
-- **☰ Browse all Steam tags:** lista completă de tag-uri din Steam (~450), cu căutare și filtrul „Selected only”. Click pe un tag îl selectează; tag-urile selectate apar și în lista ta de keywords. Dacă Steam nu poate fi accesat, aplicația folosește o listă de rezervă cu cele mai comune ~140 de tag-uri.
+---
+
+## Project structure
+
+| File | Purpose |
+|---|---|
+| `app.py` | Tkinter UI: pages, table, dialogs, background thread with a message queue |
+| `scout.py` | Pipeline: discovery → analysis → signals → prediction → explanations |
+| `model.py` | Self-calibrating coverage model (leave-one-game-out logistic regression) |
+| `embed.py` | Pretrained MiniLM sentence embeddings via ONNX Runtime |
+| `youtube_api.py` | YouTube Data API v3 client: cache, retries, quota accounting, batching |
+| `contacts.py` | Email and link extraction, email confidence rating, creator-owned links |
+| `enrich.py` | Emails from creators' own pages (`requests`, Selenium fallback) |
+| `lookup.py` | Understands any YouTube link, @handle or name for the contacts check |
+| `steam.py` | Steam store tags, full tag list, SteamSpy fallback |
+| `storage.py` | SQLite (cache, contacts, email reviews) and JSON settings |
+
+## Tech stack
+
+Python · Tkinter/ttk · YouTube Data API v3 · SQLite · NumPy · ONNX Runtime + Hugging Face Tokenizers (MiniLM) · Selenium · PyInstaller · GitHub Actions
+
+## Limitations
+
+- **Coverage chance** means "how likely a channel like this is to cover a game like yours". It does not predict whether they will read your email.
+- **Reachability** (the size penalty in expected views) is an estimate based on creator interviews, not a measured value.
+- **Games are recognised from video titles,** and only the last 30 uploads per channel are analysed.
+- **The free API quota** is 10,000 units per day.
